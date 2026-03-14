@@ -1,6 +1,8 @@
-# HTTP Proxy
+# MITM Proxy UI
 
 An HTTP/SOCKS5 proxy with a web-based monitoring UI built on [mitmproxy](https://mitmproxy.org/).
+
+![UI example](image.png)
 
 ## Features
 
