@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+proxy.db
+proxy.db-wal
+proxy.db-shm
+settings.json

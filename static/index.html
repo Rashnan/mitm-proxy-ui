@@ -1,0 +1,844 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HTTP Proxy Monitor</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --surface2: #1c2129;
+    --border: #30363d; --text: #c9d1d9; --text-dim: #8b949e;
+    --accent: #58a6ff; --red: #f85149; --green: #3fb950;
+    --yellow: #d29922; --orange: #db6d28; --purple: #bc8cff;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+    background: var(--bg); color: var(--text); font-size: 13px;
+    height: 100vh; display: flex; flex-direction: column;
+  }
+
+  /* Header with stats */
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 16px; background: var(--surface);
+    border-bottom: 1px solid var(--border); flex-shrink: 0; gap: 16px;
+  }
+  .header-left { display: flex; align-items: center; gap: 16px; }
+  header h1 { font-size: 14px; font-weight: 600; white-space: nowrap; }
+  .header-stats {
+    display: flex; gap: 14px; font-size: 11px; color: var(--text-dim);
+  }
+  .header-stats .stat { display: flex; align-items: center; gap: 4px; }
+  .header-stats .stat-val { color: var(--text); font-weight: 600; }
+  .header-stats .stat-val.warn { color: var(--orange); }
+  .header-stats .stat-val.err { color: var(--red); }
+  .header-right { display: flex; align-items: center; gap: 10px; }
+  .status { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-dim); }
+  .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--red); }
+  .status-dot.connected { background: var(--green); }
+  .sidebar-toggle {
+    background: none; border: none; color: var(--text-dim);
+    padding: 4px; cursor: pointer; display: flex; align-items: center;
+    border-radius: 4px;
+  }
+  .sidebar-toggle:hover { color: var(--accent); background: rgba(88,166,255,0.08); }
+  .sidebar-toggle svg { width: 18px; height: 18px; }
+
+  .main { display: flex; flex: 1; overflow: hidden; }
+
+  /* Sidebar */
+  .sidebar {
+    width: 280px; background: var(--surface); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; flex-shrink: 0; overflow-y: auto;
+    margin-left: 0; transition: margin-left 0.2s;
+  }
+  .sidebar.collapsed { margin-left: -280px; }
+  .sidebar h2 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
+    color: var(--text-dim); padding: 12px 14px 6px;
+  }
+  .rule-section { padding: 0 14px 12px; }
+  .rule-section textarea {
+    width: 100%; height: 70px; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px;
+    font-family: inherit; font-size: 11px; resize: vertical; outline: none;
+  }
+  .rule-section textarea:focus { border-color: var(--accent); }
+  .rule-section .hint { font-size: 10px; color: var(--text-dim); margin-top: 3px; }
+  .btn-row { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+  .btn {
+    padding: 5px 12px; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--surface); color: var(--text); font-family: inherit;
+    font-size: 11px; cursor: pointer; transition: all 0.15s; white-space: nowrap;
+    text-decoration: none;
+  }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .btn.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  .btn.primary:hover { opacity: 0.85; }
+  .btn.danger { border-color: var(--red); color: var(--red); }
+  .btn.danger:hover { background: var(--red); color: #fff; }
+  .btn.warn { border-color: var(--orange); color: var(--orange); }
+  .btn.warn:hover { background: var(--orange); color: #fff; }
+  .btn.success { border-color: var(--green); color: var(--green); }
+  .btn.success:hover { background: var(--green); color: var(--bg); }
+  .btn.small { padding: 3px 8px; font-size: 10px; }
+
+  .toggle-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 14px; border-bottom: 1px solid var(--border);
+  }
+  .toggle-row .label { font-size: 12px; color: var(--text); }
+  .toggle-row .sublabel { font-size: 10px; color: var(--text-dim); margin-top: 1px; }
+  .switch { position: relative; width: 36px; height: 20px; flex-shrink: 0; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .slider {
+    position: absolute; inset: 0; background: var(--border); border-radius: 20px;
+    cursor: pointer; transition: 0.2s;
+  }
+  .slider::before {
+    content: ''; position: absolute; height: 14px; width: 14px; left: 3px; bottom: 3px;
+    background: var(--text); border-radius: 50%; transition: 0.2s;
+  }
+  .switch input:checked + .slider { background: var(--accent); }
+  .switch input:checked + .slider::before { transform: translateX(16px); }
+  .switch input:checked + .slider.warn-slider { background: var(--orange); }
+
+  .intercept-filter { padding: 0 14px 10px; }
+  .intercept-filter input {
+    width: 100%; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px;
+    font-family: inherit; font-size: 11px; outline: none;
+  }
+  .intercept-filter input:focus { border-color: var(--accent); }
+
+  .content-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  .toolbar {
+    display: flex; align-items: center; gap: 8px; padding: 6px 12px;
+    border-bottom: 1px solid var(--border); flex-shrink: 0;
+  }
+  .toolbar input {
+    flex: 1; background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 8px; font-family: inherit; font-size: 12px; outline: none;
+  }
+  .toolbar input:focus { border-color: var(--accent); }
+  .toolbar label {
+    font-size: 11px; color: var(--text-dim); display: flex; align-items: center;
+    gap: 3px; cursor: pointer; white-space: nowrap;
+  }
+
+  .split-view { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  .table-area { flex: 1; overflow: auto; min-height: 150px; }
+
+  table { width: 100%; border-collapse: collapse; }
+  thead { position: sticky; top: 0; background: var(--surface); z-index: 1; }
+  th {
+    text-align: left; padding: 6px 10px; font-size: 10px; text-transform: uppercase;
+    letter-spacing: 0.5px; color: var(--text-dim); border-bottom: 1px solid var(--border);
+  }
+  td {
+    padding: 4px 10px; border-bottom: 1px solid var(--border);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 500px; cursor: pointer;
+  }
+  tr:hover { background: rgba(88,166,255,0.04); }
+  tr.selected { background: rgba(88,166,255,0.1); }
+  tr.blocked { background: rgba(248,81,73,0.08); }
+  tr.intercepted { background: rgba(219,109,40,0.12); }
+  tr.intercepted:hover { background: rgba(219,109,40,0.18); }
+  .method { font-weight: 600; }
+  .method-GET { color: var(--green); } .method-POST { color: var(--yellow); }
+  .method-PUT { color: var(--orange); } .method-DELETE { color: var(--red); }
+  .method-CONNECT { color: var(--purple); }
+  .status-2xx { color: var(--green); } .status-3xx { color: var(--accent); }
+  .status-4xx { color: var(--yellow); } .status-5xx { color: var(--red); }
+  .badge {
+    display: inline-block; font-size: 9px; padding: 1px 5px;
+    border-radius: 3px; font-weight: 600;
+  }
+  .badge-blocked { background: var(--red); color: #fff; }
+  .badge-tunnel { background: var(--yellow); color: var(--bg); }
+  .badge-replay { background: var(--purple); color: #fff; }
+  .badge-modified { background: var(--accent); color: var(--bg); }
+  .badge-intercepted { background: var(--orange); color: #fff; animation: pulse 1.5s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.6} }
+  .empty { display:flex; align-items:center; justify-content:center; height:150px; color:var(--text-dim); }
+
+  .detail-panel {
+    height: 0; border-top: 1px solid var(--border); background: var(--surface);
+    display: flex; flex-direction: column; overflow: hidden; transition: height 0.15s;
+  }
+  .detail-panel.open { height: 45vh; }
+  .detail-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px; border-bottom: 1px solid var(--border); flex-shrink: 0; gap: 8px;
+  }
+  .detail-header .title {
+    font-size: 12px; font-weight: 600; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+  }
+  .detail-actions { display: flex; gap: 4px; align-items: center; flex-shrink: 0; }
+  .detail-tabs { display: flex; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .detail-tab {
+    padding: 6px 14px; font-size: 11px; cursor: pointer; color: var(--text-dim);
+    border-bottom: 2px solid transparent; transition: 0.15s;
+  }
+  .detail-tab:hover { color: var(--text); }
+  .detail-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .detail-body { flex: 1; overflow: auto; padding: 10px 14px; }
+  .detail-body pre {
+    font-family: inherit; font-size: 12px; white-space: pre-wrap;
+    word-break: break-all; color: var(--text);
+  }
+  .header-table { width: 100%; border-collapse: collapse; }
+  .header-table td {
+    padding: 2px 8px; border-bottom: 1px solid var(--border);
+    font-size: 12px; cursor: default; max-width: none;
+  }
+  .header-table td:first-child { color: var(--accent); white-space: nowrap; width: 1%; font-weight: 600; }
+  .header-table td:last-child { color: var(--text); word-break: break-all; white-space: normal; }
+  .meta-line { color: var(--text-dim); font-size: 12px; margin-bottom: 8px; }
+  .meta-line strong { color: var(--text); }
+
+  .edit-field { margin-bottom: 10px; }
+  .edit-field label { display: block; font-size: 10px; color: var(--text-dim); margin-bottom: 3px; text-transform: uppercase; }
+  .edit-field input, .edit-field select {
+    width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 4px; padding: 5px 8px; font-family: inherit; font-size: 12px; outline: none;
+  }
+  .edit-field input:focus, .edit-field textarea:focus { border-color: var(--accent); }
+  .edit-field textarea {
+    width: 100%; min-height: 60px; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 4px; padding: 5px 8px;
+    font-family: inherit; font-size: 12px; outline: none; resize: vertical;
+  }
+  .edit-row { display: flex; gap: 6px; }
+  .edit-row .edit-field { flex: 1; }
+  .edit-row .edit-field.small { flex: 0 0 80px; }
+  .edit-headers textarea { min-height: 100px; }
+  .intercept-banner {
+    background: var(--orange); color: #fff; padding: 8px 14px; font-size: 12px;
+    font-weight: 600; display: flex; align-items: center; justify-content: space-between;
+    flex-shrink: 0;
+  }
+  .intercept-banner .btn { color: #fff; border-color: rgba(255,255,255,0.4); }
+  .intercept-banner .btn:hover { background: rgba(255,255,255,0.15); }
+
+  /* Host actions at bottom of detail */
+  .host-actions {
+    border-top: 1px solid var(--border); padding: 8px 14px;
+    display: flex; gap: 6px; align-items: center; flex-shrink: 0;
+    font-size: 11px; color: var(--text-dim);
+  }
+  .host-actions strong { color: var(--text); margin-right: 4px; }
+
+  /* JSON syntax highlighting */
+  .json-body { font-family: inherit; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+  .json-key { color: var(--accent); }
+  .json-str { color: var(--green); }
+  .json-num { color: var(--yellow); }
+  .json-bool { color: var(--orange); }
+  .json-null { color: var(--red); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-left">
+    <button class="sidebar-toggle" onclick="toggleSidebar()" title="Toggle settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+    </button>
+    <h1>HTTP Proxy</h1>
+    <div class="header-stats">
+      <div class="stat">Requests: <span class="stat-val" id="statTotal">0</span></div>
+      <div class="stat">Blocked: <span class="stat-val err" id="statBlocked">0</span></div>
+      <div class="stat">Paused: <span class="stat-val warn" id="statIntercepted">0</span></div>
+      <div class="stat">Avg: <span class="stat-val" id="statLatency">-</span></div>
+      <div class="stat" id="interceptIndicator" style="display:none">
+        <span class="badge badge-intercepted" style="font-size:10px;padding:2px 8px">INTERCEPT ON</span>
+      </div>
+    </div>
+  </div>
+  <div class="header-right">
+    <div class="status">
+      <div class="status-dot" id="statusDot"></div>
+      <span id="statusText">Disconnected</span>
+    </div>
+  </div>
+</header>
+
+<div class="main">
+  <aside class="sidebar collapsed" id="sidebar">
+    <div class="toggle-row">
+      <div><div class="label">SSL Passthrough</div><div class="sublabel">Skip HTTPS interception</div></div>
+      <label class="switch"><input type="checkbox" id="sslPassthrough" onchange="saveSetting('ssl_passthrough', this.checked)"><span class="slider"></span></label>
+    </div>
+    <div class="toggle-row">
+      <div><div class="label">Intercept Requests</div><div class="sublabel">Pause outgoing (client -> server)</div></div>
+      <label class="switch"><input type="checkbox" id="interceptReq" onchange="saveSetting('intercept_requests', this.checked)"><span class="slider warn-slider"></span></label>
+    </div>
+    <div class="toggle-row">
+      <div><div class="label">Intercept Responses</div><div class="sublabel">Pause incoming (server -> client)</div></div>
+      <label class="switch"><input type="checkbox" id="interceptRes" onchange="saveSetting('intercept_responses', this.checked)"><span class="slider warn-slider"></span></label>
+    </div>
+    <div class="intercept-filter">
+      <input type="text" id="interceptFilter" placeholder="Intercept filter (e.g. *.example.com)" onchange="saveSetting('intercept_filter', this.value)">
+    </div>
+
+    <h2>Blocklist</h2>
+    <div class="rule-section">
+      <textarea id="blocklist" placeholder="*.ads.example.com&#10;tracking.example.com" oninput="markRulesDirty()"></textarea>
+      <div class="hint">One pattern per line. * wildcards.</div>
+    </div>
+    <h2>Allowlist</h2>
+    <div class="rule-section">
+      <textarea id="allowlist" placeholder="*.example.com&#10;api.github.com" oninput="markRulesDirty()"></textarea>
+      <div class="hint">If set, only matching hosts allowed.</div>
+    </div>
+    <div class="rule-section">
+      <div class="btn-row">
+        <button class="btn primary" id="saveRulesBtn" onclick="saveRules()" disabled>Save Rules</button>
+        <button class="btn danger" onclick="deleteAllLogs()">Delete All Logs</button>
+      </div>
+    </div>
+  </aside>
+
+  <div class="content-area">
+    <div class="toolbar">
+      <select id="methodFilter" onchange="renderTable()" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-family:inherit;font-size:12px;outline:none;">
+        <option value="">All Methods</option>
+        <option value="GET">GET</option>
+        <option value="POST">POST</option>
+        <option value="PUT">PUT</option>
+        <option value="PATCH">PATCH</option>
+        <option value="DELETE">DELETE</option>
+        <option value="HEAD">HEAD</option>
+        <option value="OPTIONS">OPTIONS</option>
+        <option value="CONNECT">CONNECT</option>
+      </select>
+      <input type="text" id="filter" placeholder="Filter by URL, host, status..." oninput="renderTable()">
+      <label><input type="checkbox" id="autoscroll" checked onchange="toggleAutoScroll()"> Auto-scroll</label>
+      <button class="btn small warn" onclick="resumeAll()">Resume All</button>
+      <button class="btn small danger" onclick="clearRequests()">Clear</button>
+    </div>
+
+    <div class="split-view">
+      <div class="table-area" id="tableArea">
+        <table>
+          <thead><tr>
+            <th style="width:60px">Method</th>
+            <th>URL</th>
+            <th style="width:65px">Status</th>
+            <th style="width:65px">Size</th>
+            <th style="width:65px">Time</th>
+            <th style="width:75px">When</th>
+          </tr></thead>
+          <tbody id="tbody"></tbody>
+        </table>
+        <div class="empty" id="emptyMsg">No requests yet</div>
+      </div>
+
+      <div class="detail-panel" id="detailPanel">
+        <div id="interceptBanner" class="intercept-banner" style="display:none">
+          <span id="interceptBannerText">PAUSED</span>
+          <div>
+            <button class="btn small" onclick="saveEditsAndResume()">Save & Send</button>
+            <button class="btn small" onclick="actionKill(selectedId)">Abort</button>
+          </div>
+        </div>
+        <div class="detail-header">
+          <div class="title" id="detailTitle">-</div>
+          <div class="detail-actions" id="detailActions"></div>
+        </div>
+        <div class="detail-tabs" id="detailTabs"></div>
+        <div class="detail-body" id="detailBody"></div>
+        <div class="host-actions" id="hostActions" style="display:none"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const requests = new Map();
+let ws = null, autoScroll = true, selectedId = null, activeTab = 'request';
+let detailCache = {};
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.onopen = () => {
+    document.getElementById('statusDot').classList.add('connected');
+    document.getElementById('statusText').textContent = 'Connected';
+  };
+  ws.onclose = () => {
+    document.getElementById('statusDot').classList.remove('connected');
+    document.getElementById('statusText').textContent = 'Disconnected';
+    setTimeout(connect, 2000);
+  };
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'request') {
+      requests.set(msg.data.id, msg.data);
+      trimRequests(); renderTable(); updateStats();
+      if (msg.data.intercepted) selectFlow(msg.data.id);
+    } else if (msg.type === 'update') {
+      requests.set(msg.data.id, msg.data);
+      delete detailCache[msg.data.id];
+      renderTable(); updateStats();
+      if (msg.data.intercepted) selectFlow(msg.data.id);
+      else if (selectedId === msg.data.id) loadDetail(selectedId);
+    } else if (msg.type === 'delete') {
+      requests.delete(msg.data.id);
+      if (selectedId === msg.data.id) closeDetail();
+      renderTable(); updateStats();
+    }
+  };
+}
+
+function trimRequests() { while (requests.size > 5000) requests.delete(requests.keys().next().value); }
+
+function getFiltered() {
+  const q = document.getElementById('filter').value.toLowerCase();
+  const method = document.getElementById('methodFilter').value;
+  let arr = Array.from(requests.values());
+  if (method) arr = arr.filter(r => r.method === method);
+  if (!q) return arr;
+  return arr.filter(r => r.url.toLowerCase().includes(q) || r.host.toLowerCase().includes(q) ||
+    String(r.status_code).includes(q));
+}
+
+function renderTable() {
+  const tbody = document.getElementById('tbody');
+  const filtered = getFiltered();
+  document.getElementById('emptyMsg').style.display = filtered.length ? 'none' : 'flex';
+  const slice = filtered.slice(-500).reverse();
+  tbody.innerHTML = slice.map(r => {
+    const sc = r.blocked ? '' : r.status_code < 300 ? 'status-2xx' :
+      r.status_code < 400 ? 'status-3xx' : r.status_code < 500 ? 'status-4xx' : 'status-5xx';
+    const t = new Date(r.timestamp * 1000);
+    const ts = t.toLocaleTimeString('en-US', {hour12:false, hour:'2-digit', minute:'2-digit', second:'2-digit'});
+    const size = r.content_length > 0 ? (r.content_length > 1024 ? (r.content_length/1024).toFixed(1)+' KB' : r.content_length+' B') : '-';
+    const statusCell = r.blocked ? '<span class="badge badge-blocked">403</span>' :
+      r.intercepted ? `<span class="badge badge-intercepted">${r.intercept_phase==='request'?'OUT':'IN'}</span>` :
+      r.passthrough ? '<span class="badge badge-tunnel">TUNNEL</span>' :
+      `<span class="${sc}">${r.status_code || '...'}</span>`;
+    const trClass = r.blocked ? 'blocked' : r.intercepted ? 'intercepted' : '';
+    return `<tr class="${trClass} ${r.id===selectedId?'selected':''}" onclick="selectFlow('${r.id}')">
+      <td class="method method-${r.method}">${r.method}${r.is_replay?' <span class="badge badge-replay" title="Replayed">R</span>':''}${r.modified?' <span class="badge badge-modified" title="Modified">M</span>':''}</td>
+      <td title="${esc(r.url)}">${esc(r.url)}${r.server_ip ? ` <span style="color:var(--text-dim)">[${esc(r.server_ip)}]</span>` : ''}</td>
+      <td>${statusCell}</td>
+      <td>${size}</td>
+      <td>${r.duration_ms > 0 ? r.duration_ms+'ms' : '-'}</td>
+      <td>${ts}</td>
+    </tr>`;
+  }).join('');
+  if (autoScroll) document.getElementById('tableArea').scrollTop = 0;
+}
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+function updateStats() {
+  const all = Array.from(requests.values());
+  document.getElementById('statTotal').textContent = all.length;
+  const blocked = all.filter(r => r.blocked).length;
+  const intercepted = all.filter(r => r.intercepted).length;
+  document.getElementById('statBlocked').textContent = blocked;
+  document.getElementById('statIntercepted').textContent = intercepted;
+  const wl = all.filter(r => r.duration_ms > 0);
+  document.getElementById('statLatency').textContent = wl.length
+    ? (wl.reduce((s,r) => s+r.duration_ms, 0)/wl.length).toFixed(0)+' ms' : '-';
+}
+
+function toggleAutoScroll() { autoScroll = document.getElementById('autoscroll').checked; }
+function toggleSidebar() { document.getElementById('sidebar').classList.toggle('collapsed'); }
+
+// --- Detail ---
+
+function selectFlow(id) {
+  selectedId = id;
+  activeTab = 'request';
+  document.getElementById('detailPanel').classList.add('open');
+  renderTable(); loadDetail(id);
+}
+
+function closeDetail() {
+  selectedId = null;
+  document.getElementById('detailPanel').classList.remove('open');
+  document.getElementById('interceptBanner').style.display = 'none';
+  document.getElementById('hostActions').style.display = 'none';
+  renderTable();
+}
+
+async function loadDetail(id) {
+  const entry = requests.get(id);
+  if (!entry) return;
+  document.getElementById('detailTitle').textContent = `${entry.method} ${entry.url}`;
+
+  document.getElementById('interceptBanner').style.display = entry.intercepted ? 'flex' : 'none';
+  if (entry.intercepted) {
+    const dir = entry.intercept_phase === 'request' ? 'OUTGOING (client \u2192 server)' : 'INCOMING (server \u2192 client)';
+    document.getElementById('interceptBannerText').textContent = `PAUSED \u2014 ${dir}`;
+  }
+
+  const acts = document.getElementById('detailActions');
+  acts.innerHTML = `
+    ${entry.intercepted ? `<button class="btn small success" onclick="saveEditsAndResume()">Send</button>` : ''}
+    <button class="btn small" onclick="actionReplay('${id}')">Replay</button>
+    <button class="btn small" onclick="actionDuplicate('${id}')">Duplicate</button>
+    <button class="btn small" onclick="actionRevert('${id}')">Revert</button>
+    ${entry.intercepted ? '' : `<button class="btn small" onclick="actionResume('${id}')">Resume</button>`}
+    <button class="btn small danger" onclick="actionKill('${id}')">Abort</button>
+    <button class="btn small danger" onclick="actionDelete('${id}')">Del</button>
+    <button class="btn small" onclick="closeDetail()">X</button>
+  `;
+
+  if (!detailCache[id]) {
+    try {
+      const res = await fetch(`/api/flow/${id}`);
+      if (res.ok) detailCache[id] = await res.json();
+    } catch(e) {}
+  }
+
+  // Dynamic tabs
+  const d = detailCache[id] || entry;
+  const isModified = d.modified || entry.modified;
+  const hasOrigReq = isModified && d.original && d.original.request_method;
+  const hasOrigRes = isModified && d.original && d.original.response_status_code;
+  const tabs = [
+    { id: 'request', label: 'Request' },
+    { id: 'response', label: 'Response' },
+  ];
+  if (hasOrigReq) tabs.push({ id: 'orig-req', label: 'Original Req' });
+  if (hasOrigRes) tabs.push({ id: 'orig-res', label: 'Original Res' });
+  if (entry.intercepted && entry.intercept_phase === 'request') {
+    tabs.push({ id: 'edit-req', label: 'Edit Req' });
+  } else if (entry.intercepted && entry.intercept_phase === 'response') {
+    tabs.push({ id: 'edit-res', label: 'Edit Res' });
+  }
+
+  const tabsEl = document.getElementById('detailTabs');
+  tabsEl.innerHTML = tabs.map(t =>
+    `<div class="detail-tab ${t.id===activeTab?'active':''}" data-tab="${t.id}" onclick="switchTab('${t.id}')">${t.label}</div>`
+  ).join('');
+
+  const tabIds = tabs.map(t => t.id);
+  if (entry.intercepted && !tabIds.includes(activeTab)) {
+    activeTab = tabIds.includes('edit-req') ? 'edit-req' : tabIds.includes('edit-res') ? 'edit-res' : 'request';
+    tabsEl.querySelectorAll('.detail-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === activeTab));
+  }
+
+  // Host actions (block/allow)
+  const ha = document.getElementById('hostActions');
+  if (entry.host && !entry.passthrough) {
+    ha.style.display = 'flex';
+    ha.innerHTML = `
+      <strong>${esc(entry.host)}</strong>
+      <button class="btn small danger" onclick="addToBlocklist('${esc(entry.host)}')">Block host</button>
+      <button class="btn small success" onclick="addToAllowlist('${esc(entry.host)}')">Allow host</button>
+      <button class="btn small danger" onclick="addToBlocklist('*.${esc(entry.host)}')">Block *.${esc(entry.host)}</button>
+    `;
+  } else {
+    ha.style.display = 'none';
+  }
+
+  renderDetail();
+}
+
+function switchTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll('.detail-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+  renderDetail();
+}
+
+function renderDetail() {
+  const body = document.getElementById('detailBody');
+  const entry = selectedId ? requests.get(selectedId) : null;
+  const detail = selectedId ? detailCache[selectedId] : null;
+  if (!entry) { body.innerHTML = '<div class="empty">Select a request</div>'; return; }
+  const d = detail || entry;
+
+  const hdrs = (h) => {
+    if (!h || !h.length) return '<span style="color:var(--text-dim)">No headers</span>';
+    return '<table class="header-table">' + h.map(([k,v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('') + '</table>';
+  };
+  const hdrsToText = (h) => (h||[]).map(([k,v]) => `${k}: ${v}`).join('\n');
+
+  const formatBody = (body, ct) => {
+    if (!body) return '';
+    ct = (ct || '').toLowerCase();
+    if (ct.includes('application/json') || (body.trim().startsWith('{') || body.trim().startsWith('['))) {
+      try {
+        const obj = JSON.parse(body);
+        return '<pre class="json-body">' + syntaxJson(JSON.stringify(obj, null, 2)) + '</pre>';
+      } catch(e) {}
+    }
+    return '<pre>' + esc(body) + '</pre>';
+  };
+
+  const syntaxJson = (s) => {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/"(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?/g, (m) => {
+        let cls = 'json-str';
+        if (m.endsWith(':')) cls = 'json-key';
+        else if (/^"/.test(m)) cls = 'json-str';
+        return `<span class="${cls}">${m}</span>`;
+      })
+      .replace(/\b(true|false)\b/g, '<span class="json-bool">$1</span>')
+      .replace(/\b(null)\b/g, '<span class="json-null">$1</span>')
+      .replace(/\b(-?\d+\.?\d*([eE][+-]?\d+)?)\b/g, '<span class="json-num">$1</span>');
+  };
+
+  switch (activeTab) {
+    case 'request': {
+      const dl = d.request_content_length > 0 ? ` <a href="/api/flow/${entry.id}/request/content" class="btn small" download>Download</a>` : '';
+      body.innerHTML = `
+        <div class="meta-line"><strong>${esc(entry.method)}</strong> ${esc(entry.url)}</div>
+        <div class="meta-line">HTTP/${esc(d.request_http_version||'?')} | Host: <strong>${esc(entry.host)}</strong>:${entry.port} | ${d.request_content_length||0} bytes${dl}</div>
+        ${d.client_ip ? `<div class="meta-line">Client: <strong>${esc(d.client_ip)}:${d.client_port||''}</strong>${d.server_ip ? ` | Server: <strong>${esc(d.server_ip)}:${d.server_port||''}</strong>` : ''}</div>` : ''}
+        <h3 style="font-size:11px;color:var(--text-dim);margin:10px 0 4px">HEADERS</h3>
+        ${hdrs(d.request_headers)}
+        ${d.request_body ? `<h3 style="font-size:11px;color:var(--text-dim);margin:10px 0 4px">BODY</h3>${formatBody(d.request_body, d.content_type)}` : ''}
+      `;
+      break;
+    }
+    case 'response': {
+      if (!entry.status_code && !entry.blocked && !entry.intercepted) {
+        body.innerHTML = '<div class="empty">No response yet</div>'; break;
+      }
+      const dl = (d.content_length||0) > 0 ? ` <a href="/api/flow/${entry.id}/response/content" class="btn small" download>Download</a>` : '';
+      body.innerHTML = `
+        <div class="meta-line">Status: <strong>${entry.status_code}</strong> ${esc(d.response_reason||'')} | ${d.content_length||0} bytes | ${esc(d.content_type||'-')}${dl}</div>
+        <h3 style="font-size:11px;color:var(--text-dim);margin:10px 0 4px">HEADERS</h3>
+        ${hdrs(d.response_headers)}
+        ${d.response_body ? `<h3 style="font-size:11px;color:var(--text-dim);margin:10px 0 4px">BODY</h3>${formatBody(d.response_body, d.content_type)}` : ''}
+      `;
+      break;
+    }
+    case 'orig-req': {
+      const o = d.original || {};
+      body.innerHTML = `
+        <div class="meta-line"><strong>${esc(o.request_method||'?')}</strong> ${esc(o.request_url||'?')}</div>
+        <h3 style="font-size:11px;color:var(--text-dim);margin:10px 0 4px">HEADERS</h3>
+        ${hdrs(o.request_headers)}
+        ${o.request_body ? `<h3 style="font-size:11px;color:var(--text-dim);margin:10px 0 4px">BODY</h3>${formatBody(o.request_body, '')}` : ''}
+      `;
+      break;
+    }
+    case 'orig-res': {
+      const o = d.original || {};
+      body.innerHTML = `
+        <div class="meta-line">Status: <strong>${o.response_status_code||'?'}</strong> ${esc(o.response_reason||'')}</div>
+        <h3 style="font-size:11px;color:var(--text-dim);margin:10px 0 4px">HEADERS</h3>
+        ${hdrs(o.response_headers)}
+        ${o.response_body ? `<h3 style="font-size:11px;color:var(--text-dim);margin:10px 0 4px">BODY</h3>${formatBody(o.response_body, '')}` : ''}
+      `;
+      break;
+    }
+    case 'edit-req': {
+      body.innerHTML = `
+        <div class="edit-row">
+          <div class="edit-field small"><label>Method</label><input id="editMethod" value="${esc(entry.method)}" oninput="markEditDirty()"></div>
+          <div class="edit-field"><label>URL</label><input id="editUrl" value="${esc(entry.url)}" oninput="markEditDirty()"></div>
+        </div>
+        <div class="edit-field edit-headers"><label>Headers (Name: Value per line)</label><textarea id="editReqHeaders" oninput="markEditDirty()">${esc(hdrsToText(d.request_headers))}</textarea></div>
+        <div class="edit-field"><label>Body</label><textarea id="editReqBody" oninput="markEditDirty()">${esc(d.request_body||'')}</textarea></div>
+        <div class="btn-row">
+          <button class="btn success" onclick="saveEditsAndResume()">Send</button>
+        </div>
+      `;
+      break;
+    }
+    case 'edit-res': {
+      if (!entry.status_code && !entry.intercepted) { body.innerHTML = '<div class="empty">No response to edit</div>'; break; }
+      body.innerHTML = `
+        <div class="edit-row">
+          <div class="edit-field small"><label>Status</label><input id="editStatus" value="${entry.status_code||200}"></div>
+          <div class="edit-field"><label>Reason</label><input id="editReason" value="${esc(d.response_reason||'')}"></div>
+        </div>
+        <div class="edit-field edit-headers"><label>Headers (Name: Value per line)</label><textarea id="editResHeaders">${esc(hdrsToText(d.response_headers))}</textarea></div>
+        <div class="edit-field"><label>Body</label><textarea id="editResBody">${esc(d.response_body||'')}</textarea></div>
+        <div class="btn-row">
+          <button class="btn success" onclick="saveEditsAndResume()">Send</button>
+        </div>
+      `;
+      break;
+    }
+  }
+}
+
+// --- Edit helpers ---
+
+function markEditDirty() {
+  const btn = document.getElementById('btnSaveEdits');
+  if (btn) btn.disabled = false;
+}
+
+function parseHeaders(text) {
+  return text.split('\n').filter(l => l.includes(':')).map(l => {
+    const i = l.indexOf(':');
+    return [l.slice(0, i).trim(), l.slice(i+1).trim()];
+  });
+}
+
+async function saveRequestEdits() {
+  if (!selectedId) return;
+  const edits = { request: {} };
+  const m = document.getElementById('editMethod'), u = document.getElementById('editUrl');
+  const h = document.getElementById('editReqHeaders'), b = document.getElementById('editReqBody');
+  if (m) edits.request.method = m.value;
+  if (u) edits.request.url = u.value;
+  if (h) edits.request.headers = parseHeaders(h.value);
+  if (b) edits.request.body = b.value;
+  const res = await fetch(`/api/flow/${selectedId}`, { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(edits) });
+  if (res.ok) { delete detailCache[selectedId]; flash('Saved'); loadDetail(selectedId); }
+  else flash('Save failed', true);
+}
+
+async function saveResponseEdits() {
+  if (!selectedId) return;
+  const edits = { response: {} };
+  const s = document.getElementById('editStatus'), r = document.getElementById('editReason');
+  const h = document.getElementById('editResHeaders'), b = document.getElementById('editResBody');
+  if (s) edits.response.status_code = parseInt(s.value);
+  if (r) edits.response.reason = r.value;
+  if (h) edits.response.headers = parseHeaders(h.value);
+  if (b) edits.response.body = b.value;
+  const res = await fetch(`/api/flow/${selectedId}`, { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(edits) });
+  if (res.ok) { delete detailCache[selectedId]; flash('Saved'); loadDetail(selectedId); }
+  else flash('Save failed', true);
+}
+
+async function saveEditsAndResume() {
+  if (!selectedId) return;
+  const id = selectedId;
+  if (activeTab === 'edit-req' && document.getElementById('editMethod')) await saveRequestEdits();
+  else if (activeTab === 'edit-res' && document.getElementById('editStatus')) await saveResponseEdits();
+  await actionResume(id);
+  // Switch to read-only view immediately
+  activeTab = 'request';
+  document.getElementById('interceptBanner').style.display = 'none';
+}
+
+// --- Actions ---
+
+async function actionReplay(id) { const r = await fetch(`/api/flow/${id}/replay`, {method:'POST'}); if (r.ok) flash('Replayed'); }
+async function actionDuplicate(id) { const r = await fetch(`/api/flow/${id}/duplicate`, {method:'POST'}); if (r.ok) flash('Duplicated'); }
+async function actionRevert(id) {
+  const r = await fetch(`/api/flow/${id}/revert`, {method:'POST'});
+  if (r.ok) { delete detailCache[id]; flash('Reverted'); loadDetail(id); } else flash('Not modified', true);
+}
+async function actionResume(id) { const r = await fetch(`/api/flow/${id}/resume`, {method:'POST'}); if (r.ok) flash('Resumed'); else flash('Not intercepted', true); }
+async function actionKill(id) { const r = await fetch(`/api/flow/${id}/kill`, {method:'POST'}); if (r.ok) flash('Aborted'); else flash('Not killable', true); }
+async function actionDelete(id) { const r = await fetch(`/api/flow/${id}`, {method:'DELETE'}); if (r.ok) { requests.delete(id); closeDetail(); renderTable(); updateStats(); } }
+async function resumeAll() { await fetch('/api/flows/resume', {method:'POST'}); }
+
+function flash(msg, isErr) {
+  const el = document.getElementById('detailTitle');
+  const old = el.textContent;
+  el.textContent = msg; el.style.color = isErr ? 'var(--red)' : 'var(--green)';
+  setTimeout(() => { el.textContent = old; el.style.color = ''; }, 1500);
+}
+
+// --- Host block/allow from detail ---
+
+async function addToBlocklist(host) {
+  const ta = document.getElementById('blocklist');
+  const current = ta.value.split('\n').filter(s => s.trim());
+  if (!current.includes(host)) { current.push(host); ta.value = current.join('\n'); }
+  await saveRules();
+  closeDetail();
+}
+
+async function addToAllowlist(host) {
+  const ta = document.getElementById('allowlist');
+  const current = ta.value.split('\n').filter(s => s.trim());
+  if (!current.includes(host)) { current.push(host); ta.value = current.join('\n'); }
+  await saveRules();
+  closeDetail();
+}
+
+// --- Settings & Rules ---
+
+async function saveSetting(key, val) {
+  const r = await fetch('/api/settings', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({[key]:val}) });
+  if (r.ok) updateInterceptIndicator(await r.json());
+}
+
+function markRulesDirty() {
+  document.getElementById('saveRulesBtn').disabled = false;
+}
+
+async function saveRules() {
+  const blocklist = document.getElementById('blocklist').value.split('\n').filter(s => s.trim());
+  const allowlist = document.getElementById('allowlist').value.split('\n').filter(s => s.trim());
+  const r = await fetch('/api/rules', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({blocklist, allowlist}) });
+  if (r.ok) {
+    const btn = document.getElementById('saveRulesBtn');
+    btn.disabled = true;
+    btn.textContent = 'Saved!'; setTimeout(() => btn.textContent = 'Save Rules', 1200);
+  }
+}
+
+async function loadRules() {
+  const r = await fetch('/api/rules'); const d = await r.json();
+  document.getElementById('blocklist').value = (d.blocklist||[]).join('\n');
+  document.getElementById('allowlist').value = (d.allowlist||[]).join('\n');
+}
+
+async function loadSettings() {
+  const r = await fetch('/api/settings'); const d = await r.json();
+  document.getElementById('sslPassthrough').checked = d.ssl_passthrough;
+  document.getElementById('interceptReq').checked = d.intercept_requests;
+  document.getElementById('interceptRes').checked = d.intercept_responses;
+  document.getElementById('interceptFilter').value = d.intercept_filter || '';
+  updateInterceptIndicator(d);
+}
+
+function updateInterceptIndicator(d) {
+  const on = d.intercept_requests || d.intercept_responses;
+  const el = document.getElementById('interceptIndicator');
+  el.style.display = on ? 'flex' : 'none';
+  if (on) {
+    const parts = [];
+    if (d.intercept_requests) parts.push('OUT');
+    if (d.intercept_responses) parts.push('IN');
+    el.querySelector('.badge').textContent = 'INTERCEPT: ' + parts.join('+');
+  }
+}
+
+async function loadHistory() {
+  const r = await fetch('/api/requests'); const d = await r.json();
+  d.forEach(r => requests.set(r.id, r)); renderTable(); updateStats();
+}
+
+async function clearRequests() {
+  // Clear UI only, logs stay in DB
+  requests.clear(); detailCache = {}; closeDetail(); renderTable(); updateStats();
+}
+
+async function deleteAllLogs() {
+  if (!confirm('Delete all request logs permanently?')) return;
+  await fetch('/api/logs', {method:'DELETE'});
+  requests.clear(); detailCache = {}; closeDetail(); renderTable(); updateStats();
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
+  if (e.key === 'Escape') closeDetail();
+  if (e.key === 's') { toggleSidebar(); e.preventDefault(); }
+  if (!selectedId) return;
+  if (e.key === 'r') actionReplay(selectedId);
+  if (e.key === 'd') actionDuplicate(selectedId);
+  if (e.key === 'v') actionRevert(selectedId);
+  if (e.key === 'a') actionResume(selectedId);
+  if (e.key === 'x') actionKill(selectedId);
+  if (e.key === 'e') {
+    const entry = requests.get(selectedId);
+    if (entry && entry.intercepted) switchTab(entry.intercept_phase === 'response' ? 'edit-res' : 'edit-req');
+  }
+  if (e.key === 'Delete' || e.key === 'Backspace') actionDelete(selectedId);
+});
+
+loadSettings(); loadRules(); loadHistory(); connect();
+</script>
+</body>
+</html>
